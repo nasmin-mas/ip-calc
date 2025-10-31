@@ -1,0 +1,11 @@
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "io.github.nasmin_mas.twa",
+      "sha256_cert_fingerprints": ["9D:8D:3A:0F:96:87:61:92:B1:98:29:70:05:F4:76:C3:60:B6:3C:7F:7B:45:31:5A:51:B2:41:C0:C7:3E:E7:65"]
+    }
+  }
+]
+
