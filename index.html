@@ -1,0 +1,240 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>IPv4 演習: ネットワーク/ブロードキャスト計算</title>
+  <link rel="manifest" href="./manifest.json">
+  <meta name="theme-color" content="#111827">
+  <style>
+    :root { color-scheme: light dark; }
+    * { box-sizing: border-box; }
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Noto Sans JP, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji"; margin: 0; padding: 24px; line-height: 1.6; }
+    .container { max-width: 840px; margin: 0 auto; }
+    h1 { font-size: 1.4rem; margin: 0 0 8px; }
+    p.desc { margin: 0 0 16px; color: #6b7280; }
+    .card { border: 1px solid #e5e7eb; border-radius: 12px; padding: 16px; margin-bottom: 16px; background: #fff; }
+    @media (prefers-color-scheme: dark) {
+      body { background: #0b0f14; color: #e5e7eb; }
+      .card { background: #0f1720; border-color: #1f2937; }
+      p.desc { color: #9ca3af; }
+      input { background: #0b1220; border-color: #243046; color: #e5e7eb; }
+    }
+    .row { display: grid; grid-template-columns: 1fr; gap: 12px; }
+    @media (min-width: 640px) { .row { grid-template-columns: 1fr 1fr; } }
+    label { font-weight: 600; font-size: 0.95rem; }
+    .value { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; font-size: 1.05rem; }
+    .muted { color: #6b7280; }
+    .actions { display: flex; gap: 8px; flex-wrap: wrap; }
+    button { appearance: none; border: 1px solid #1f2937; background: #111827; color: #f9fafb; padding: 10px 14px; border-radius: 10px; cursor: pointer; font-weight: 600; }
+    button.secondary { background: transparent; color: inherit; border-color: #9ca3af; }
+    button:disabled { opacity: 0.6; cursor: not-allowed; }
+    input { width: 100%; padding: 10px 12px; border-radius: 10px; border: 1px solid #d1d5db; font-size: 1rem; }
+    .result { font-weight: 600; }
+    .ok { color: #059669; }
+    .ng { color: #dc2626; }
+    .inline { display: inline-block; }
+    .hint { font-size: 0.9rem; }
+    .footer { margin-top: 16px; font-size: 0.86rem; color: #6b7280; }
+    .kbd { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono"; padding: 2px 6px; border: 1px solid #cbd5e1; border-bottom-width: 3px; border-radius: 6px; }
+  </style>
+  <meta name="color-scheme" content="light dark">
+</head>
+<body>
+  <div class="container">
+    <h1>IPv4 演習: ネットワーク/ブロードキャスト計算</h1>
+    <p class="desc">出題される IPv4 アドレスとプレフィックス長から、ネットワークアドレスとブロードキャストアドレスを求めてください。</p>
+
+    <div class="card" id="problemCard">
+      <div class="row" style="align-items: end;">
+        <div>
+          <label>出題 IP / プレフィックス</label>
+          <div class="value" id="displayCidr">-</div>
+          <div class="muted hint">例: 192.168.10.25/27</div>
+        </div>
+        <div class="actions" style="justify-content: flex-end;">
+          <button id="btnNew">問題を出す</button>
+          <button class="secondary" id="btnReveal" disabled>答えを表示</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="row">
+        <div>
+          <label for="inputNetwork">ネットワークアドレス</label>
+          <input id="inputNetwork" placeholder="例: 192.168.10.0" autocomplete="off">
+        </div>
+        <div>
+          <label for="inputBroadcast">ブロードキャストアドレス</label>
+          <input id="inputBroadcast" placeholder="例: 192.168.10.31" autocomplete="off">
+        </div>
+      </div>
+      <div class="actions" style="margin-top: 12px;">
+        <button id="btnCheck">採点</button>
+        <button class="secondary" id="btnClear">リセット</button>
+      </div>
+      <div id="feedback" class="result" style="margin-top: 10px;"></div>
+      <div id="answer" class="muted" style="margin-top: 6px; display: none;"></div>
+    </div>
+
+    <div class="footer">ヒント: IPv4は32ビット。ネットマスクは上位<span class="kbd">/n</span>ビットが1。</div>
+  </div>
+
+  <script>
+    // Service Worker 登録（対応ブラウザのみ）
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('./sw.js').catch(() => {});
+      });
+    }
+
+    // ユーティリティ: 文字列IP → 数値、数値 → 文字列IP
+    function ipToNumber(ipString) {
+      const parts = ipString.trim().split('.')
+        .map(p => p.trim())
+        .filter(p => p.length > 0);
+      if (parts.length !== 4) return null;
+      let num = 0;
+      for (const part of parts) {
+        if (!/^\d+$/.test(part)) return null;
+        const oct = Number(part);
+        if (oct < 0 || oct > 255) return null;
+        num = (num << 8) | oct;
+      }
+      return num >>> 0; // unsigned
+    }
+
+    function numberToIp(num) {
+      return [
+        (num >>> 24) & 0xff,
+        (num >>> 16) & 0xff,
+        (num >>> 8) & 0xff,
+        num & 0xff
+      ].join('.');
+    }
+
+    // ネットマスク生成 (/0〜/32)
+    function prefixToMask(prefix) {
+      if (prefix < 0 || prefix > 32) return null;
+      if (prefix === 0) return 0 >>> 0;
+      const mask = (0xffffffff << (32 - prefix)) >>> 0;
+      return mask >>> 0;
+    }
+
+    function calcNetwork(ipNum, prefix) {
+      const mask = prefixToMask(prefix);
+      if (mask === null) return null;
+      return (ipNum & mask) >>> 0;
+    }
+
+    function calcBroadcast(ipNum, prefix) {
+      const mask = prefixToMask(prefix);
+      if (mask === null) return null;
+      const network = (ipNum & mask) >>> 0;
+      const wildcard = (~mask) >>> 0;
+      return (network | wildcard) >>> 0;
+    }
+
+    // ランダム出題
+    function randomIp() {
+      // 学習しやすいようにクラスA/B/Cのプライベートも含む一般的レンジを中心に
+      // 先頭オクテットは 1..223 (マルチキャスト 224+ は除外)
+      const o1 = Math.floor(Math.random() * 223) + 1; // 1..223
+      const o2 = Math.floor(Math.random() * 256);
+      const o3 = Math.floor(Math.random() * 256);
+      const o4 = Math.floor(Math.random() * 256);
+      // ネットワーク/ブロードキャストと衝突しにくくするため、/31, /32 は出題しない
+      return `${o1}.${o2}.${o3}.${o4}`;
+    }
+
+    function randomPrefix() {
+      // 実務でよく出る範囲を優先 (/8〜/30)
+      const min = 8, max = 30;
+      return Math.floor(Math.random() * (max - min + 1)) + min;
+    }
+
+    // DOM
+    const displayCidr = document.getElementById('displayCidr');
+    const btnNew = document.getElementById('btnNew');
+    const btnReveal = document.getElementById('btnReveal');
+    const inputNetwork = document.getElementById('inputNetwork');
+    const inputBroadcast = document.getElementById('inputBroadcast');
+    const btnCheck = document.getElementById('btnCheck');
+    const btnClear = document.getElementById('btnClear');
+    const feedback = document.getElementById('feedback');
+    const answer = document.getElementById('answer');
+
+    let current = { ip: null, prefix: null, network: null, broadcast: null };
+
+    function setProblem(ip, prefix) {
+      const ipNum = ipToNumber(ip);
+      const networkNum = calcNetwork(ipNum, prefix);
+      const broadcastNum = calcBroadcast(ipNum, prefix);
+      current = {
+        ip,
+        prefix,
+        network: numberToIp(networkNum),
+        broadcast: numberToIp(broadcastNum)
+      };
+      displayCidr.textContent = `${ip}/${prefix}`;
+      btnReveal.disabled = false;
+      clearAnswers();
+    }
+
+    function clearAnswers() {
+      inputNetwork.value = '';
+      inputBroadcast.value = '';
+      feedback.textContent = '';
+      feedback.className = 'result';
+      answer.style.display = 'none';
+      answer.textContent = '';
+    }
+
+    function normalizeIpText(text) {
+      return text.trim().replace(/\s+/g, '');
+    }
+
+    function checkAnswers() {
+      if (!current.ip) return;
+      const ansNw = normalizeIpText(inputNetwork.value);
+      const ansBc = normalizeIpText(inputBroadcast.value);
+      const nOk = ansNw === current.network;
+      const bOk = ansBc === current.broadcast;
+      if (nOk && bOk) {
+        feedback.textContent = '正解！よくできました。';
+        feedback.className = 'result ok';
+      } else if (nOk || bOk) {
+        const which = nOk ? 'ネットワークアドレスは正解。' : 'ブロードキャストアドレスは正解。';
+        feedback.textContent = which + ' もう一度見直してみましょう。';
+        feedback.className = 'result ng';
+      } else {
+        feedback.textContent = '不正解。ヒント: ネットマスクとビット演算を意識。';
+        feedback.className = 'result ng';
+      }
+    }
+
+    function revealAnswer() {
+      if (!current.ip) return;
+      answer.style.display = 'block';
+      answer.innerHTML = `答え: ネットワーク = <span class="value inline">${current.network}</span> / ブロードキャスト = <span class="value inline">${current.broadcast}</span>`;
+    }
+
+    // イベント
+    btnNew.addEventListener('click', () => {
+      const ip = randomIp();
+      const prefix = randomPrefix();
+      setProblem(ip, prefix);
+    });
+
+    btnReveal.addEventListener('click', () => revealAnswer());
+    btnCheck.addEventListener('click', () => checkAnswers());
+    btnClear.addEventListener('click', () => clearAnswers());
+
+    // 初期出題
+    setProblem('192.168.10.25', 27);
+  </script>
+</body>
+</html>
+
+
